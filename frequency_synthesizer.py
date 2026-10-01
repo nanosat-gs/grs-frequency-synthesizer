@@ -7,6 +7,11 @@ publica a sintonia efetiva (`tune` = central + Doppler) para o receptor.
     SUB  <station manager>   [b"freq", b"<Hz>"]  [b"doppler", b"<Hz>"]
     PUB  <bind>              [b"tune", b"<Hz>"]
 
+Com mais de um rádio na estação (um por faixa), o Station Manager anuncia
+cada um no seu canal — `freq.vhf`, `doppler.vhf`, `freq.uhf`... — e roda um
+sintetizador por rádio, com `--channel`. O `tune` que sai continua sem canal:
+cada sintetizador tem a sua porta, e o receptor do rádio assina só ela.
+
 Roda como processo próprio (`python frequency_synthesizer.py`): no diagrama da
 estação ele mora no Station Server, junto do receptor, e o Station Manager no
 Control Server — em máquinas diferentes, falando ZMQ pela rede.
@@ -46,7 +51,12 @@ LOG_EVERY_S = 10.0
 
 
 class FrequencySynthesizer:
-    def __init__(self, iq_receiver_socket_address, station_manager_pub_address):
+    def __init__(self, iq_receiver_socket_address, station_manager_pub_address, channel=None):
+        self.channel = channel or None
+        suffix = f".{self.channel}" if self.channel else ""
+        self.freq_topic = "freq" + suffix
+        self.doppler_topic = "doppler" + suffix
+
         self.center_freq = None
         self.doppler_offset = 0
 
@@ -62,8 +72,10 @@ class FrequencySynthesizer:
         # pedido de parada sem girar à toa.
         self.manager_socket.setsockopt(zmq.RCVTIMEO, 200)
         self.manager_socket.connect(station_manager_pub_address)
-        self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, "freq")
-        self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, "doppler")
+        # O SUB do ZMQ filtra por PREFIXO: sem canal, "freq" também recebe
+        # "freq.vhf". Por isso handle() compara o tópico inteiro.
+        self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, self.freq_topic)
+        self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, self.doppler_topic)
 
         self.iq_receiver_address = iq_receiver_socket_address
         self.station_manager_address = station_manager_pub_address
@@ -97,7 +109,7 @@ class FrequencySynthesizer:
             print(f"[Synthesizer] mensagem ilegível descartada: {frames!r}", flush=True)
             return None
 
-        if topic == "freq":
+        if topic == self.freq_topic:
             if value <= 0:
                 print(f"[Synthesizer] freq inválida descartada: {value}", flush=True)
                 return None
@@ -107,7 +119,7 @@ class FrequencySynthesizer:
                 self.doppler_offset = 0
             return self._send_tune()
 
-        if topic == "doppler":
+        if topic == self.doppler_topic:
             if self.center_freq is None:
                 # Religado no meio de uma passagem: o Station Manager só
                 # reenvia a nominal a cada 30 anúncios. Avisa uma vez, não 30.
@@ -128,7 +140,7 @@ class FrequencySynthesizer:
 
     def run(self):
         print(f"[Synthesizer] Running: {self.station_manager_address} -> "
-              f"{self.iq_receiver_address}", flush=True)
+              f"{self.iq_receiver_address} (canal {self.channel or 'único'})", flush=True)
         self._running = True
 
         try:
@@ -165,9 +177,13 @@ def main(argv=None):
     parser.add_argument("--station-manager", default=DEFAULT_STATION_MANAGER,
                         help="PUB de freq/doppler do Station Manager "
                              f"(padrão {DEFAULT_STATION_MANAGER})")
+    parser.add_argument("--channel", default="",
+                        help="Rádio deste sintetizador (vhf, uhf...): assina freq.<canal> e "
+                             "doppler.<canal>. Vazio = os tópicos sem canal, de uma estação "
+                             "com um rádio só.")
     args = parser.parse_args(argv)
 
-    synth = FrequencySynthesizer(args.bind, args.station_manager)
+    synth = FrequencySynthesizer(args.bind, args.station_manager, channel=args.channel)
     signal.signal(signal.SIGTERM, lambda *_: synth.stop())
     signal.signal(signal.SIGINT, lambda *_: synth.stop())
     synth.run()

@@ -132,8 +132,8 @@ def test_main_aceita_os_enderecos(monkeypatch):
     class Fake:
         tunes_sent = 0
 
-        def __init__(self, bind, manager):
-            seen.update(bind=bind, manager=manager)
+        def __init__(self, bind, manager, channel=None):
+            seen.update(bind=bind, manager=manager, channel=channel)
 
         def run(self):
             pass
@@ -143,5 +143,30 @@ def test_main_aceita_os_enderecos(monkeypatch):
 
     monkeypatch.setattr(sys.modules["frequency_synthesizer"], "FrequencySynthesizer", Fake)
 
-    assert main(["--bind", "tcp://*:6000", "--station-manager", "tcp://sm:5581"]) == 0
-    assert seen == {"bind": "tcp://*:6000", "manager": "tcp://sm:5581"}
+    assert main(["--bind", "tcp://*:6000", "--station-manager", "tcp://sm:5581",
+                 "--channel", "uhf"]) == 0
+    assert seen == {"bind": "tcp://*:6000", "manager": "tcp://sm:5581", "channel": "uhf"}
+
+
+# --- canais: um sintetizador por rádio ---------------------------------------------
+
+
+def test_com_canal_so_os_topicos_do_seu_radio_valem():
+    s = FrequencySynthesizer("inproc://tune-uhf", "inproc://manager-uhf", channel="uhf")
+    try:
+        assert s.handle([b"freq.vhf", b"145900000"]) is None
+        assert s.handle([b"freq.uhf", b"468400000"]) == 468_400_000
+        assert s.handle([b"doppler.vhf", b"1000"]) is None
+        assert s.handle([b"doppler.uhf", b"3210"]) == 468_403_210
+    finally:
+        s.close()
+
+
+def test_sem_canal_ignora_os_topicos_com_canal(synth):
+    """O SUB do ZMQ filtra por prefixo: "freq" também recebe "freq.vhf". Sem
+    comparar o tópico inteiro, o sintetizador de canal único sintonizaria o
+    receptor na frequência do outro rádio."""
+    assert synth.handle([b"freq.uhf", b"468400000"]) is None
+    assert synth.handle([b"freq", b"145900000"]) == 145_900_000
+    assert synth.handle([b"doppler.uhf", b"3210"]) is None
+    assert synth.center_freq == 145_900_000
