@@ -274,3 +274,8 @@ TSWLatexianTemp*
 
 # Output folder
 build/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/

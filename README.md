@@ -41,22 +41,27 @@ The IQ Receiver is autonomous and does not depend on the Frequency Synthesizer t
 
 ## Usage
 
-The `FrequencySynthesizer` class is not meant to be run standalone. It is instantiated and managed by the Station Manager:
+Run it as its own process, next to the IQ Receiver:
+
+```
+pip install -r requirements.txt
+python frequency_synthesizer.py --bind tcp://*:5557 --station-manager tcp://station-manager:5581
+```
+
+In the SpaceLab ground station (`nanosat-gs/grs-station`) it runs as the
+`grs-frequency-synthesizer` service of the compose, built from the `station`
+branch of this fork.
+
+The class can still be embedded:
 
 ```python
 from frequency_synthesizer import FrequencySynthesizer
 
 synth = FrequencySynthesizer(
     iq_receiver_socket_address="tcp://*:5557",
-    station_manager_pub_address="tcp://localhost:5558"
+    station_manager_pub_address="tcp://localhost:5581"
 )
-synth.run()
-```
-
-To stop it gracefully:
-
-```python
-synth.stop()
+synth.run()      # blocks; call synth.stop() from another thread or a signal handler
 ```
 
 ### ZMQ Interface
@@ -79,6 +84,9 @@ Published topics (to IQ Receiver):
 - On startup, `center_freq` is `None`. The synthesizer will not send any tune command until the Station Manager sends a `freq` command.
 - If a `doppler` command arrives before any `freq` command has been received, it is ignored and a warning is printed.
 - Doppler offset defaults to 0 and is updated whenever a `doppler` command is received.
+- A `freq` with the SAME value only re-sends the current tune; it does not reset the Doppler offset. The Station Manager repeats `freq` periodically for late subscribers, and resetting there would throw the receiver back to the nominal frequency for ~1 s every time.
+- Malformed messages (wrong number of parts, unparsable value, non-positive `freq`) are dropped with a warning instead of stopping the process.
+- With no announcements, nothing is published: the IQ Receiver keeps its last tune.
 - The effective frequency sent to the IQ Receiver is always `center_freq + doppler_offset`.
 - It is the Station Manager's responsibility to ensure the initial `center_freq` matches the frequency the IQ Receiver was started with.
 
