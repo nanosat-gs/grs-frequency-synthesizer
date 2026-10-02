@@ -170,3 +170,43 @@ def test_sem_canal_ignora_os_topicos_com_canal(synth):
     assert synth.handle([b"freq", b"145900000"]) == 145_900_000
     assert synth.handle([b"doppler.uhf", b"3210"]) is None
     assert synth.center_freq == 145_900_000
+
+
+# --- ajuste fino (offset) ----------------------------------------------------------
+
+
+def test_tune_soma_o_ajuste_fino(synth):
+    synth.handle([b"freq", b"145900000"])
+    synth.handle([b"doppler", b"-1000"])
+
+    assert synth.handle([b"offset", b"1203"]) == 145_900_203
+    assert synth.handle([b"doppler", b"-990"]) == 145_900_213
+
+
+def test_ajuste_fino_antes_da_frequencia_e_ignorado(synth):
+    assert synth.handle([b"offset", b"1203"]) is None
+    assert synth.handle([b"freq", b"145900000"]) == 145_900_000
+
+
+def test_frequencia_nova_zera_o_ajuste_fino(synth):
+    synth.handle([b"freq", b"145900000"])
+    synth.handle([b"offset", b"1203"])
+
+    assert synth.handle([b"freq", b"437200000"]) == 437_200_000
+
+
+def test_freq_repetido_mantem_o_ajuste_fino(synth):
+    synth.handle([b"freq", b"145900000"])
+    synth.handle([b"offset", b"1203"])
+
+    assert synth.handle([b"freq", b"145900000"]) == 145_901_203
+
+
+def test_ajuste_fino_por_canal():
+    s = FrequencySynthesizer("inproc://tune-afc", "inproc://manager-afc", channel="uhf")
+    try:
+        s.handle([b"freq.uhf", b"468400000"])
+        assert s.handle([b"offset.vhf", b"500"]) is None
+        assert s.handle([b"offset.uhf", b"-3000"]) == 468_397_000
+    finally:
+        s.close()

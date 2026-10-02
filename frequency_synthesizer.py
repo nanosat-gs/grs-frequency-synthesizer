@@ -5,7 +5,13 @@ Fica entre o Station Manager e o IQ Receiver: assina a frequência central
 publica a sintonia efetiva (`tune` = central + Doppler) para o receptor.
 
     SUB  <station manager>   [b"freq", b"<Hz>"]  [b"doppler", b"<Hz>"]
+                             [b"offset", b"<Hz>"]   (opcional)
     PUB  <bind>              [b"tune", b"<Hz>"]
+
+`tune` = central + Doppler + desvio. O `offset` é o ajuste fino medido pelo
+bloco FFT do rádio (o erro do oscilador do satélite, que o Doppler previsto
+não vê), já integrado pelo Station Manager. Sem ele, vale zero — e o
+sintetizador se comporta exatamente como antes.
 
 Com mais de um rádio na estação (um por faixa), o Station Manager anuncia
 cada um no seu canal — `freq.vhf`, `doppler.vhf`, `freq.uhf`... — e roda um
@@ -56,9 +62,11 @@ class FrequencySynthesizer:
         suffix = f".{self.channel}" if self.channel else ""
         self.freq_topic = "freq" + suffix
         self.doppler_topic = "doppler" + suffix
+        self.offset_topic = "offset" + suffix
 
         self.center_freq = None
         self.doppler_offset = 0
+        self.fine_offset = 0
 
         self.context = zmq.Context()
 
@@ -76,6 +84,7 @@ class FrequencySynthesizer:
         # "freq.vhf". Por isso handle() compara o tópico inteiro.
         self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, self.freq_topic)
         self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, self.doppler_topic)
+        self.manager_socket.setsockopt_string(zmq.SUBSCRIBE, self.offset_topic)
 
         self.iq_receiver_address = iq_receiver_socket_address
         self.station_manager_address = station_manager_pub_address
@@ -85,7 +94,7 @@ class FrequencySynthesizer:
         self._waiting_logged = False
 
     def _effective_frequency(self):
-        return self.center_freq + self.doppler_offset
+        return self.center_freq + self.doppler_offset + self.fine_offset
 
     def _send_tune(self):
         if self.center_freq is None:
@@ -117,6 +126,8 @@ class FrequencySynthesizer:
                 print(f"[Synthesizer] frequência central {value} Hz", flush=True)
                 self.center_freq = value
                 self.doppler_offset = 0
+                # O ajuste fino era do satélite anterior.
+                self.fine_offset = 0
             return self._send_tune()
 
         if topic == self.doppler_topic:
@@ -135,6 +146,14 @@ class FrequencySynthesizer:
                 self._last_log = now
                 print(f"[Synthesizer] tune {tune} Hz (Doppler {value:+d} Hz)", flush=True)
             return tune
+
+        if topic == self.offset_topic:
+            if self.center_freq is None:
+                return None
+            if value != self.fine_offset:
+                print(f"[Synthesizer] ajuste fino {value:+d} Hz", flush=True)
+            self.fine_offset = value
+            return self._send_tune()
 
         return None
 
